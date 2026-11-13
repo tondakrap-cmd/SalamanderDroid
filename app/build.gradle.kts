@@ -63,6 +63,7 @@ dependencies {
     implementation("org.tukaani:xz:1.10")
     implementation("com.github.luben:zstd-jni:1.5.7-3@aar")
     implementation("com.hierynomus:sshj:0.40.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.80")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.github.luben:zstd-jni:1.5.7-3")
