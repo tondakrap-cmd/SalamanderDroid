@@ -107,6 +107,51 @@ class UiSmokeTest {
         rule.waitForIdle()
     }
 
+    /**
+     * Saving a server with a password creates the vault. The master-password dialog must stay
+     * usable while the server list (which shows "password stored") is on screen.
+     */
+    @Test
+    fun creatingTheVaultFromServerDialogDoesNotBlockTheUi() {
+        grantAndStart()
+        val server = cz.k4.salamanderdroid.remote.Server(
+            id = "nas1", name = "NAS", host = "nas.local", user = "u", savePassword = true,
+            protocol = cz.k4.salamanderdroid.remote.Protocol.Smb, share = "data",
+        )
+        key(KeyEvent.KEYCODE_K, KeyEvent.META_CTRL_ON)
+        rule.runOnUiThread { app.editServer(server, creating = true) }
+        rule.waitForIdle()
+        rule.runOnUiThread {
+            val edit = app.dialogs.last() as Dlg.ServerEdit
+            app.close(edit)
+            edit.onSave(server, "heslo-k-nasu", false)
+        }
+        waitFor { app.dialogs.any { it is Dlg.NewMaster } }
+        // The list behind the dialog recomposes with the new server; this used to deadlock.
+        rule.onNodeWithText("NAS").assertIsDisplayed()
+        val fields = rule.onAllNodes(hasSetTextAction())
+        fields[0].performTextInput("hlavni heslo trezoru")
+        fields[1].performTextInput("hlavni heslo trezoru")
+        rule.onNodeWithText("Nastavit").performClick()
+        waitFor { app.hasStoredPassword(server) && app.dialogs.none { it is Dlg.NewMaster } }
+        rule.onNodeWithText("heslo v trezoru", substring = true).assertIsDisplayed()
+        // Locking and storing again asks for the master password, again without blocking.
+        rule.runOnUiThread {
+            app.lockVault(silent = true)
+            app.editServer(server, creating = false)
+        }
+        rule.waitForIdle()
+        rule.runOnUiThread {
+            val edit = app.dialogs.last() as Dlg.ServerEdit
+            app.close(edit)
+            edit.onSave(server, "jine-heslo", false)
+        }
+        waitFor { app.dialogs.any { it is Dlg.Secret } }
+        rule.onNode(hasSetTextAction()).performTextInput("hlavni heslo trezoru")
+        rule.onNodeWithText("Odemknout").performClick()
+        waitFor { app.dialogs.none { it is Dlg.Secret } && app.vaultUnlocked }
+    }
+
     @Test
     fun asksForStorageAccessFirst() {
         rule.onNodeWithText("Otevřít nastavení oprávnění").assertIsDisplayed()

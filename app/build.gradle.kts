@@ -14,7 +14,7 @@ android {
         targetSdk = 35
         // CI numbers the builds, so a newer APK always installs over an older one.
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        versionName = "0.2.0"
+        versionName = "0.2.1"
     }
 
     // Release signing key from the environment (CI secrets); without it the debug key is used.

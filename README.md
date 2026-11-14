@@ -141,7 +141,7 @@ a `SIGNING_PASSWORD`.
 
 ## Stav
 
-Verze 0.2.0 přidává cloud, síťové disky a ovládání myší. Automatické testy pokrývají jádro
+Verze 0.2 přidává cloud, síťové disky a ovládání myší. Automatické testy pokrývají jádro
 (operace, archivy, trezor), SFTP proti vestavěnému serveru, SMB proti serveru Samba a ovládání
 klávesnicí i myší. OneDrive a Google Drive jsou otestované jen proti napodobeninám obou služeb,
 se skutečnými účty zatím ne; přetahování mezi okny a více oken nejdou mimo zařízení ověřit vůbec.

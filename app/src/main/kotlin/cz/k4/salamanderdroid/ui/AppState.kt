@@ -1048,18 +1048,28 @@ class AppState(application: Application) : AndroidViewModel(application) {
     val vaultUnlocked: Boolean get() = vaultKey != null
 
     /** Unlocks (or creates) the vault, asking for the master password. Worker threads only. */
-    private fun unlockedVault(): Pair<Vault, Vault.Key>? = synchronized(vaultLock) {
-        vaultKey?.let { key ->
-            vaultLastUse = System.currentTimeMillis()
-            return vault!! to key
+    /**
+     * Serializes unlocking on worker threads. It is held while the user types the master
+     * password, so nothing on the main thread may ever wait for it; [vaultLock] only guards
+     * the fields and is never held across a dialog.
+     */
+    private val vaultUnlockLock = Any()
+
+    private fun unlockedVault(): Pair<Vault, Vault.Key>? = synchronized(vaultUnlockLock) {
+        synchronized(vaultLock) {
+            val key = vaultKey
+            val open = vault
+            if (key != null && open != null) {
+                vaultLastUse = System.currentTimeMillis()
+                return open to key
+            }
         }
         val existing = Vault.load(vaultFile)
+        val opened: Pair<Vault, Vault.Key>
         if (existing == null) {
             val master = ask<CharArray?> { Dlg.NewMaster("Nový trezor hesel", it) } ?: return null
-            val (created, key) = Vault.create(vaultFile, master)
+            opened = Vault.create(vaultFile, master)
             master.fill(' ')
-            vault = created
-            vaultKey = key
         } else {
             var error: String? = null
             while (true) {
@@ -1069,15 +1079,18 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 val key = existing.unlock(master)
                 master.fill(' ')
                 if (key != null) {
-                    vault = existing
-                    vaultKey = key
+                    opened = existing to key
                     break
                 }
                 error = "Nesprávné hlavní heslo."
             }
         }
-        vaultLastUse = System.currentTimeMillis()
-        vault!! to vaultKey!!
+        synchronized(vaultLock) {
+            vault = opened.first
+            vaultKey = opened.second
+            vaultLastUse = System.currentTimeMillis()
+        }
+        opened
     }
 
     fun lockVault(silent: Boolean = false) {
@@ -1096,7 +1109,9 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 try {
                     val (store, key) = unlockedVault() ?: return@withContext null
                     val master = ask<CharArray?> { Dlg.NewMaster("Změnit hlavní heslo trezoru", it) } ?: return@withContext null
-                    synchronized(vaultLock) { vaultKey = store.changeMaster(key, master) }
+                    // The slow key derivation runs outside the lock.
+                    val newKey = store.changeMaster(key, master)
+                    synchronized(vaultLock) { vaultKey = newKey }
                     key.wipe()
                     master.fill(' ')
                     "Hlavní heslo trezoru bylo změněno"
@@ -1111,15 +1126,26 @@ class AppState(application: Application) : AndroidViewModel(application) {
     /** The unlocked vault when there is one, otherwise a fresh read of the file. */
     private fun vaultView(): Vault? = synchronized(vaultLock) { vault ?: Vault.load(vaultFile) }
 
-    fun hasStoredPassword(server: Server): Boolean = try {
-        vaultView()?.contains(server.id) == true
+    private fun readStoredPasswords(): Set<String> = try {
+        vaultView()?.ids().orEmpty()
     } catch (_: IOException) {
-        false
+        emptySet()
     }
+
+    /** Server ids with a stored password; kept as state so the UI never touches the vault itself. */
+    private var storedPasswords by mutableStateOf(readStoredPasswords())
+
+    private fun refreshStoredPasswords() {
+        val ids = readStoredPasswords()
+        scope.launch { storedPasswords = ids }
+    }
+
+    fun hasStoredPassword(server: Server): Boolean = server.id in storedPasswords
 
     private fun removeStoredPassword(server: Server) {
         try {
             vaultView()?.remove(server.id)
+            refreshStoredPasswords()
         } catch (error: IOException) {
             remoteLog.log(server.label(), "CHYBA trezoru", error.message.orEmpty())
         }
@@ -1135,8 +1161,9 @@ class AppState(application: Application) : AndroidViewModel(application) {
             ask { Dlg.Secret("Heslo ke klíči", "Heslo k soukromému klíči\n$keyFile:", null, "Použít", it) }
 
         override fun storedPassword(server: Server): CharArray? {
-            if (!hasStoredPassword(server)) return null
             return try {
+                // Asked on a worker thread: read the vault itself, the UI state may lag behind.
+                if (vaultView()?.contains(server.id) != true) return null
                 val (store, key) = unlockedVault() ?: return null
                 store.get(key, server.id)
             } catch (error: IOException) {
@@ -1149,6 +1176,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
             try {
                 val (store, key) = unlockedVault() ?: return
                 store.set(key, server.id, password)
+                refreshStoredPasswords()
                 remoteLog.log(server.label(), "heslo uloženo do trezoru")
             } catch (error: IOException) {
                 remoteLog.log(server.label(), "CHYBA trezoru", error.message.orEmpty())

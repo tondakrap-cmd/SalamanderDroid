@@ -37,6 +37,9 @@ class Vault private constructor(
 
     fun contains(id: String): Boolean = entries.containsKey(id)
 
+    /** Ids of the servers that have a password stored. */
+    fun ids(): Set<String> = entries.keys.toSet()
+
     /** Null when the master password is wrong. */
     fun unlock(master: CharArray): Key? {
         val key = derive(master, salt, params)
