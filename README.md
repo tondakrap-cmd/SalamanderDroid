@@ -66,7 +66,7 @@ Navíc proti desktopu: dotykové ovládání, lišta tlačítek F2–F8, přenos
 
 ## Instalace
 
-APK stáhnete z artefaktů sestavení v záložce Actions (nebo si ho sestavíte, viz níže), otevřete ho
+APK stáhnete z [Releases](https://github.com/tondakrap-cmd/SalamanderDroid/releases/latest), otevřete ho
 v tabletu a povolíte instalaci z neznámých zdrojů. Při prvním spuštění aplikace požádá o oprávnění
 **Přístup ke všem souborům** — bez něj správce souborů na Androidu pracovat nemůže.
 

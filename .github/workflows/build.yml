@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,3 +25,22 @@ jobs:
         with:
           name: salamander-droid-apk
           path: app/build/outputs/apk/release/*.apk
+      - name: Version
+        id: version
+        run: |
+          echo "name=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
+          cp app/build/outputs/apk/release/app-release.apk "SalamanderDroid-$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts).apk"
+      - name: Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.name }}
+          name: Salamander Droid ${{ steps.version.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          files: SalamanderDroid-*.apk
+          body: |
+            Instalační APK pro Android 11 a novější. Stáhněte soubor `.apk` níže, otevřete ho v tabletu
+            a povolte instalaci z neznámého zdroje.
+
+            APK je podepsané ladicím klíčem sestavení; při přechodu z jiného sestavení je nutné
+            aplikaci nejprve odinstalovat.
