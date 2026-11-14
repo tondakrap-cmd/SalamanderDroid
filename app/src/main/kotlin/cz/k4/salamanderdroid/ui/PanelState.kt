@@ -42,7 +42,7 @@ sealed interface Loc {
     fun display(): String = when (this) {
         is Local -> path
         is Archive -> if (inner.isEmpty()) archive else "$archive/$inner"
-        is Remote -> "sftp://${server.label()}$path"
+        is Remote -> server.url() + path
         is Cloud -> "${account.kind.scheme}${account.pathName()}$path"
     }
 

@@ -63,6 +63,8 @@ import cz.k4.salamanderdroid.core.validateName
 import cz.k4.salamanderdroid.remote.Connections
 import cz.k4.salamanderdroid.remote.KnownHosts
 import cz.k4.salamanderdroid.remote.PasswordAnswer
+import cz.k4.salamanderdroid.remote.Protocol
+import cz.k4.salamanderdroid.remote.SmbConnections
 import cz.k4.salamanderdroid.remote.RemoteLog
 import cz.k4.salamanderdroid.remote.RemotePrompts
 import cz.k4.salamanderdroid.remote.Server
@@ -230,7 +232,10 @@ class AppState(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         left.dispose()
         right.dispose()
-        Thread { connections.disconnectAll() }.start()
+        Thread {
+            connections.disconnectAll()
+            smb.disconnectAll()
+        }.start()
         vaultKey?.wipe()
     }
 
@@ -311,7 +316,11 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 ?: throw IOException("Adresář v archivu neexistuje: ${target.inner}")
             Listing(target, entries, null)
         }
-        is Loc.Remote -> {
+        is Loc.Remote -> if (target.server.protocol == Protocol.Smb) {
+            val fs = smb.fs(target.server)
+            val path = normalizePath(target.path.ifEmpty { "/" + target.server.initialDir })
+            Listing(Loc.Remote(target.server, path), fs.list(path), fs.space())
+        } else {
             val fs = connections.fs(target.server)
             val wanted = target.path.ifEmpty { target.server.initialDir.ifEmpty { fs.home() } }
             val path = if (wanted.startsWith("/") && !wanted.contains("/../") && !wanted.endsWith("/..")) wanted else fs.canonicalize(wanted)
@@ -326,7 +335,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
 
     private fun fsOf(loc: Loc): Fs? = when (loc) {
         is Loc.Local -> LocalFs
-        is Loc.Remote -> connections.fs(loc.server)
+        is Loc.Remote -> remoteFs(loc.server)
         is Loc.Cloud -> cloudFs(loc.account)
         is Loc.Archive -> null
     }
@@ -338,11 +347,10 @@ class AppState(application: Application) : AndroidViewModel(application) {
     fun parseLoc(text: String, base: Loc): Loc? {
         val typed = text.trim()
         if (typed.isEmpty()) return null
-        if (typed.startsWith("sftp://")) {
-            val rest = typed.removePrefix("sftp://")
-            val server = servers.filter { rest == it.label() || rest.startsWith(it.label() + "/") }
-                .maxByOrNull { it.label().length } ?: return null
-            return Loc.Remote(server, rest.removePrefix(server.label()).let { if (it.isEmpty()) "" else normalizePath(it) })
+        if (typed.startsWith("sftp://") || typed.startsWith("smb://")) {
+            val server = servers.filter { typed == it.url() || typed.startsWith(it.url() + "/") }
+                .maxByOrNull { it.url().length } ?: return null
+            return Loc.Remote(server, typed.removePrefix(server.url()).let { if (it.isEmpty()) "" else normalizePath(it) })
         }
         for (kind in CloudKind.entries) {
             if (!typed.startsWith(kind.scheme)) continue
@@ -737,7 +745,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         when (loc) {
             is Loc.Remote -> dialogs += Dlg.Confirm("Smazat na serveru", "Trvale smazat $what ze serveru ${loc.server.displayName()}? Tuto akci nelze vrátit.", "Smazat") {
                 runJob("Mažu na serveru") { job ->
-                    deleteTrees(connections.fs(loc.server), paths, job.cancel) { job.status(it) }
+                    deleteTrees(remoteFs(loc.server), paths, job.cancel) { job.status(it) }
                 }
             }
             is Loc.Cloud -> dialogs += Dlg.Confirm("Smazat v cloudu", "Smazat $what z úložiště ${loc.account.displayName()}? Položky se přesunou do koše služby.", "Smazat") {
@@ -1149,6 +1157,17 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
 
     val connections = Connections(knownHosts, remoteLog, prompts)
+    val smb = SmbConnections(remoteLog, prompts)
+
+    private fun remoteFs(server: Server): Fs = if (server.protocol == Protocol.Smb) smb.fs(server) else connections.fs(server)
+
+    fun isConnected(server: Server): Boolean =
+        if (server.protocol == Protocol.Smb) smb.isConnected(server.id) else connections.isConnected(server.id)
+
+    private fun disconnectServer(server: Server) {
+        connections.disconnect(server)
+        smb.disconnect(server)
+    }
 
     fun serverManager() {
         dialogs += Dlg.ServerManager()
@@ -1163,7 +1182,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         for (panel in listOf(left, right)) {
             if ((panel.loc as? Loc.Remote)?.server?.id == loc.server.id) panel.navigate(Loc.Local(home))
         }
-        io({ connections.disconnect(loc.server) }) { flash("Odpojeno: ${loc.server.displayName()}") }
+        io({ disconnectServer(loc.server) }) { flash("Odpojeno: ${loc.server.displayName()}") }
     }
 
     private fun saveServers(list: List<Server>) {
@@ -1184,7 +1203,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 }
             }
             io({
-                if (!creating) connections.disconnect(server)
+                if (!creating) disconnectServer(server)
                 if (forget || !edited.savePassword) {
                     removeStoredPassword(edited)
                 } else if (password.isNotEmpty()) {
@@ -1205,7 +1224,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 if ((panel.loc as? Loc.Remote)?.server?.id == server.id) panel.navigate(Loc.Local(home))
             }
             io({
-                connections.disconnect(server)
+                disconnectServer(server)
                 removeStoredPassword(server)
             })
         }

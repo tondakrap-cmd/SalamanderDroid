@@ -14,6 +14,15 @@ enum class AuthMethod(val key: String, val label: String) {
     }
 }
 
+enum class Protocol(val key: String, val label: String, val defaultPort: Int) {
+    Sftp("sftp", "SFTP (SSH)", 22),
+    Smb("smb", "SMB (Windows, NAS)", 445);
+
+    companion object {
+        fun parse(text: String) = entries.firstOrNull { it.key == text } ?: Sftp
+    }
+}
+
 /** Remote server; the file format matches Salamander RS, so the list can be copied over. */
 data class Server(
     val id: String = randomHex(8),
@@ -29,12 +38,20 @@ data class Server(
     val options: String = "",
     /** Offer to keep the password in the vault. */
     val savePassword: Boolean = false,
+    val protocol: Protocol = Protocol.Sftp,
+    /** SMB: name of the shared folder. */
+    val share: String = "",
+    /** SMB: Windows domain or workgroup (optional). */
+    val domain: String = "",
 ) {
     /** `user@host` or `user@host:port` for non-default ports. */
     fun label(): String {
         val prefix = if (user.isEmpty()) "" else "$user@"
-        return if (port == 22) "$prefix$host" else "$prefix$host:$port"
+        return if (port == protocol.defaultPort) "$prefix$host" else "$prefix$host:$port"
     }
+
+    /** Address shown in panel paths, e.g. `sftp://user@host` or `smb://user@nas/share`. */
+    fun url(): String = if (protocol == Protocol.Smb) "smb://${label()}/$share" else "sftp://${label()}"
 
     fun displayName(): String = name.ifEmpty { label() }
 
@@ -46,12 +63,18 @@ data class Server(
         if (host.isEmpty()) return "Zadejte adresu serveru"
         plain(host, "Adresa serveru")?.let { return it }
         plain(user, "Uživatelské jméno")?.let { return it }
-        if (user.isEmpty()) return "Zadejte uživatelské jméno"
+        if (protocol == Protocol.Smb) {
+            if (share.isEmpty()) return "Zadejte název sdílené složky"
+            if (share.any { it == '/' || it == '\\' || it.isISOControl() }) return "Název sdílené složky nesmí obsahovat lomítka"
+            if (domain.any { it.isWhitespace() || it.isISOControl() }) return "Doména nesmí obsahovat mezery"
+        } else if (user.isEmpty()) {
+            return "Zadejte uživatelské jméno"
+        }
         if (port !in 1..65535) return "Neplatný port"
         for ((value, what) in listOf(name to "Název", initialDir to "Počáteční adresář", identity.orEmpty() to "Klíč")) {
             if (value.contains('\n') || value.contains('\r')) return "$what nesmí obsahovat konec řádku"
         }
-        if (auth == AuthMethod.Key && identity.isNullOrEmpty()) {
+        if (protocol == Protocol.Sftp && auth == AuthMethod.Key && identity.isNullOrEmpty()) {
             return "Pro ověření klíčem zadejte soubor se soukromým klíčem"
         }
         return null
@@ -101,6 +124,9 @@ object Servers {
                 "dir" -> server.copy(initialDir = value)
                 "options" -> server.copy(options = value)
                 "save_password" -> server.copy(savePassword = value == "true")
+                "protocol" -> server.copy(protocol = Protocol.parse(value))
+                "share" -> server.copy(share = value)
+                "domain" -> server.copy(domain = value)
                 else -> server
             }
         }
@@ -114,7 +140,8 @@ object Servers {
             text.append(
                 "\n[server]\nid=${server.id}\nname=${server.name}\nhost=${server.host}\nport=${server.port}\n" +
                     "user=${server.user}\nauth=${server.auth.key}\nidentity=${server.identity.orEmpty()}\n" +
-                    "dir=${server.initialDir}\noptions=${server.options}\nsave_password=${server.savePassword}\n"
+                    "dir=${server.initialDir}\noptions=${server.options}\nsave_password=${server.savePassword}\n" +
+                    (if (server.protocol == Protocol.Smb) "protocol=smb\nshare=${server.share}\ndomain=${server.domain}\n" else "")
             )
         }
         return text.toString()

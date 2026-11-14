@@ -172,7 +172,7 @@ Zobrazení a nástroje
   Alt+F7 hledat soubory, Ctrl+, nastavení, F9 nabídka, Ctrl+N nové okno, Ctrl+Q konec
   Ctrl+S sdílet vybrané soubory do jiné aplikace
 
-Vzdálené servery (SSH/SFTP)
+Vzdálené servery (SFTP) a síťové disky (SMB)
   Ctrl+K — správce serverů a připojení; servery jsou i v Alt+F1/Alt+F2
   F5/F6 — stáhnout nebo nahrát (přesunout); F4 — upravit, uložení se nahraje zpět
   F2, F7, Shift+F4, F8 — přejmenovat, složka, soubor, smazat; Ctrl+F2 — oprávnění

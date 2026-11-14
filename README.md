@@ -17,7 +17,14 @@ s DeX), ale dá se ovládat i dotykem a na telefonu (zobrazí se jeden panel, p�
 - historie (Alt+←/→), Backspace vrátí kurzor na adresář, ze kterého jste přišli, volitelná položka `..`
 - klávesové cesty Ctrl+Shift+0–9 (uložit) a Ctrl+0–9 (skok), fungují i s českým rozložením
 - Alt+F1 / Alt+F2: úložiště (interní paměť, SD karta, USB), běžné složky, koš, klávesové cesty,
-  servery a historie
+  cloudové účty, servery a historie
+- rychlé zobrazení (Ctrl+P): druhý panel ukazuje náhled souboru pod kurzorem — obrázky, první
+  stranu PDF, text nebo hex
+- myš a trackpad: pravé tlačítko otevře místní nabídku, Ctrl+klik označí, Shift+klik označí rozsah
+- přetažení souborů myší do jiného okna nebo druhého panelu; soubory puštěné z jiné aplikace se
+  uloží do panelu
+- sdílení: Ctrl+S pošle vybrané soubory jiné aplikaci, „Uložit do Salamandera“ je přijme od jiných
+- více oken aplikace (Ctrl+N), například vedle sebe nebo na externím monitoru v DeX
 
 **Soubory**
 - kopírování a přesun s řešením konfliktů, průběhem a zrušením (zachovává časy); data se zapisují
@@ -35,6 +42,20 @@ s DeX), ale dá se ovládat i dotykem a na telefonu (zobrazí se jeden panel, p�
   jen čtení cpio a ar/deb
 - F5 z archivu rozbalí, F5 do archivu přidá, F8 v archivu odstraní, Alt+F5 zabalí, Alt+F9 rozbalí
 - ochrana proti „zip slip“: položky s `..` se nerozbalí, symbolické odkazy se nerozbalují
+
+**Cloud: OneDrive a Google Drive**
+- účty se spravují v dialogu Ctrl+Shift+K; OneDrive osobní i firemní (Microsoft Graph) a Google Drive
+- panel ukazuje `onedrive://Název/cesta` nebo `gdrive://Název/cesta`; F5/F6 stahuje a nahrává
+  (velké soubory po částech), a to i přímo mezi cloudem, serverem a druhým cloudem
+- F3, F4 (uložení se nahraje zpět), F2, F7, Shift+F4, F8; smazané položky jdou do koše služby
+- dokumenty Google (Dokumenty, Tabulky, Prezentace) se stahují převedené do formátů Office
+- přihlášení probíhá v prohlížeči (OAuth 2 s PKCE), aplikace heslo nevidí; tokeny jsou uložené
+  zašifrované klíčem z Android Keystore
+- každý účet potřebuje vlastní registraci aplikace, viz [Registrace pro cloud](#registrace-pro-cloud)
+
+**Síťové disky (SMB)**
+- sdílené složky Windows a NAS (SMB 2/3) ve správci serverů (Ctrl+K), panel `smb://uživatel@server/sdílení/cesta`
+- stejné operace jako u SFTP; heslo volitelně v šifrovaném trezoru
 
 **Vzdálené servery (SSH/SFTP)**
 - databáze serverů (Ctrl+K) ve stejném formátu jako Salamander RS; vzdálený adresář se otevře
@@ -62,7 +83,41 @@ s DeX), ale dá se ovládat i dotykem a na telefonu (zobrazí se jeden panel, p�
 | trezor XChaCha20-Poly1305 | trezor AES-256-GCM (soubor trezoru není přenositelný) |
 | schránka sdílená s jinými správci | schránka souborů jen uvnitř aplikace |
 
-Navíc proti desktopu: dotykové ovládání, lišta tlačítek F2–F8, přenosy mezi dvěma servery.
+Navíc proti desktopu: dotykové ovládání, lišta tlačítek F2–F8, přenosy mezi dvěma servery,
+OneDrive, Google Drive, síťové disky SMB, rychlé zobrazení, sdílení a přetahování mezi aplikacemi.
+
+## Registrace pro cloud
+
+Microsoft i Google vyžadují, aby se aplikace přistupující k souborům uživatele ohlásila vlastním
+identifikátorem. Registrace je zdarma a dělá se jednou; ID se pak zadá v aplikaci u účtu.
+
+### OneDrive (osobní i firemní)
+
+1. Na <https://entra.microsoft.com> otevřete **App registrations → New registration**.
+2. Jako podporované typy účtů zvolte **Accounts in any organizational directory and personal
+   Microsoft accounts** (jedna registrace pak slouží osobnímu i firemnímu OneDrive).
+3. U **Redirect URI** vyberte platformu **Public client/native (mobile & desktop)** a zadejte
+   `http://localhost`.
+4. Po vytvoření zkopírujte **Application (client) ID**.
+5. V **API permissions** přidejte delegovaná oprávnění Microsoft Graph `Files.ReadWrite.All`,
+   `offline_access` a `User.Read`.
+6. V aplikaci: Ctrl+Shift+K → Nový… → OneDrive, vložte ID aplikace. Pole Tenant nechte `common`;
+   jen u registrace omezené na jednu organizaci do něj patří ID tenantu.
+
+U firemního účtu může organizace vyžadovat schválení aplikace správcem.
+
+### Google Drive
+
+1. Na <https://console.cloud.google.com> založte projekt a v **APIs & Services → Library**
+   povolte **Google Drive API**.
+2. Nastavte obrazovku souhlasu (OAuth consent screen): typ **External**, a v části **Audience**
+   aplikaci zveřejněte (**In production**). Ve stavu Testing platí přihlášení jen 7 dní.
+3. V **Clients** vytvořte OAuth klienta typu **Desktop app** a zkopírujte **Client ID**
+   a **Client secret**.
+4. V aplikaci: Ctrl+Shift+K → Nový… → Google Drive, vložte obě hodnoty.
+
+Při prvním přihlášení Google upozorní, že aplikace není ověřená; pokračuje se přes
+**Advanced → Go to …**. Zobrazuje se „Můj disk“; sdílené disky a „Sdíleno se mnou“ zatím ne.
 
 ## Instalace
 
@@ -75,7 +130,7 @@ v tabletu a povolíte instalaci z neznámých zdrojů. Při prvním spuštění 
 Potřebujete JDK 21 a Android SDK (platforma 35, build-tools 35).
 
 ```bash
-./gradlew testDebugUnitTest      # testy jádra, SFTP proti vestavěnému serveru i UI (Robolectric)
+./gradlew testDebugUnitTest      # testy jádra, SFTP, cloudu a UI (Robolectric); test SMB potřebuje smbd a roota
 ./gradlew assembleRelease        # → app/build/outputs/apk/release/app-release.apk
 ```
 
@@ -86,8 +141,10 @@ a `SIGNING_PASSWORD`.
 
 ## Stav
 
-Verze 0.1.0 je první funkční verze. Jádro (operace, archivy, SFTP, trezor) i ovládání klávesnicí
-pokrývají automatické testy, na skutečném tabletu ale aplikace zatím vyzkoušená nebyla.
+Verze 0.2.0 přidává cloud, síťové disky a ovládání myší. Automatické testy pokrývají jádro
+(operace, archivy, trezor), SFTP proti vestavěnému serveru, SMB proti serveru Samba a ovládání
+klávesnicí i myší. OneDrive a Google Drive jsou otestované jen proti napodobeninám obou služeb,
+se skutečnými účty zatím ne; přetahování mezi okny a více oken nejdou mimo zařízení ověřit vůbec.
 
 ## Licence
 

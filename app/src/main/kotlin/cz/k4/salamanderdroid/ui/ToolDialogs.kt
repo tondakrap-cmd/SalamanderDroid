@@ -55,6 +55,7 @@ import cz.k4.salamanderdroid.core.joinPath
 import cz.k4.salamanderdroid.core.parseLocalTime
 import cz.k4.salamanderdroid.core.parseOctal
 import cz.k4.salamanderdroid.remote.AuthMethod
+import cz.k4.salamanderdroid.remote.Protocol
 import cz.k4.salamanderdroid.remote.Server
 import cz.k4.salamanderdroid.remote.randomHex
 import kotlinx.coroutines.Dispatchers
@@ -88,8 +89,8 @@ fun PlacesDialog(app: AppState, dialog: Dlg.Places) {
         for ((index, path) in hotpaths) list += Place("Ctrl+$index", path!!) { app.goTyped(path, panel) }
         if (app.cloudAccounts.isNotEmpty()) list += Place("Cloud", header = true)
         for (account in app.cloudAccounts) list += Place(account.displayName(), "${account.kind.label} — ${account.user.ifEmpty { "nepřihlášeno" }}") { app.openCloud(account, panel) }
-        if (app.servers.isNotEmpty()) list += Place("Servery (SSH/SFTP)", header = true)
-        for (server in app.servers) list += Place(server.displayName(), server.label()) { app.connect(server, panel) }
+        if (app.servers.isNotEmpty()) list += Place("Servery (SFTP, SMB)", header = true)
+        for (server in app.servers) list += Place(server.displayName(), server.url()) { app.connect(server, panel) }
         val history = panel.history().drop(1).take(15)
         if (history.isNotEmpty()) list += Place("Historie", header = true)
         for (loc in history) list += Place(loc.display()) { panel.navigate(loc) }
@@ -428,9 +429,9 @@ fun ServerManagerDialog(app: AppState, dialog: Dlg.ServerManager) {
             ) { server, _ ->
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
                     Text(server.displayName(), fontWeight = FontWeight.Bold)
-                    val detail = "${server.label()} — ${server.auth.label}" +
+                    val detail = (if (server.protocol == Protocol.Smb) "${server.url()} — SMB" else "${server.label()} — ${server.auth.label}") +
                         (if (app.hasStoredPassword(server)) " — heslo v trezoru" else "") +
-                        (if (app.connections.isConnected(server.id)) " — připojeno" else "")
+                        (if (app.isConnected(server)) " — připojeno" else "")
                     Text(detail, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -452,6 +453,9 @@ fun ServerEditDialog(app: AppState, dialog: Dlg.ServerEdit) {
     val port = remember { fieldOf(server.port.toString()) }
     val user = remember { fieldOf(server.user) }
     var auth by remember { mutableStateOf(server.auth) }
+    var protocol by remember { mutableStateOf(server.protocol) }
+    val share = remember { fieldOf(server.share) }
+    val domain = remember { fieldOf(server.domain) }
     val identity = remember { fieldOf(server.identity.orEmpty()) }
     val dir = remember { fieldOf(server.initialDir) }
     var save by remember { mutableStateOf(server.savePassword) }
@@ -463,6 +467,7 @@ fun ServerEditDialog(app: AppState, dialog: Dlg.ServerEdit) {
             name = name.value.text.trim(), host = host.value.text.trim(), port = port.value.text.trim().toIntOrNull() ?: 0,
             user = user.value.text.trim(), auth = auth, identity = identity.value.text.trim().takeIf { it.isNotEmpty() },
             initialDir = dir.value.text.trim(), savePassword = save,
+            protocol = protocol, share = share.value.text.trim(), domain = domain.value.text.trim(),
         )
         edited.validate()?.let {
             error = it
@@ -479,39 +484,57 @@ fun ServerEditDialog(app: AppState, dialog: Dlg.ServerEdit) {
         },
     ) {
         Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (candidate in Protocol.entries) {
+                    FilterChip(selected = protocol == candidate, label = { Text(candidate.label) }, onClick = {
+                        // Keep a custom port, switch the default one along with the protocol.
+                        if (port.value.text.trim() == protocol.defaultPort.toString()) port.value = TextFieldValue(candidate.defaultPort.toString())
+                        protocol = candidate
+                    })
+                }
+            }
             Field(name, "Název (např. Produkční web)", autoFocus = true)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Field(host, "Server (adresa)", Modifier.weight(3f))
                 Field(port, "Port", Modifier.weight(1f), number = true)
             }
-            Field(user, "Uživatel")
-            Text("Ověření:", fontSize = 13.sp)
-            for (method in AuthMethod.entries) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = auth == method, onClick = { auth = method })
-                    Text(method.label)
+            Field(user, if (protocol == Protocol.Smb) "Uživatel (prázdné = přístup bez účtu)" else "Uživatel")
+            if (protocol == Protocol.Smb) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Field(share, "Sdílená složka (název sdílení)", Modifier.weight(1f))
+                    Field(domain, "Doména (nepovinné)", Modifier.weight(1f))
                 }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Field(identity, "Soubor se soukromým klíčem (nepovinné)", Modifier.weight(1f))
-                OutlinedButton(onClick = {
-                    val panel = app.active
-                    val entry = panel.cursorEntry()
-                    if (panel.loc is Loc.Local && entry != null && !entry.isDirLike) {
-                        identity.value = TextFieldValue(panel.loc.pathOf(entry.name))
-                    } else {
-                        error = "Najeďte v panelu kurzorem na soubor s klíčem a zkuste to znovu."
+                Field(dir, "Počáteční složka uvnitř sdílení (nepovinné)")
+            } else {
+                Text("Ověření:", fontSize = 13.sp)
+                for (method in AuthMethod.entries) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = auth == method, onClick = { auth = method })
+                        Text(method.label)
                     }
-                }) { Text("Z kurzoru") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Field(identity, "Soubor se soukromým klíčem (nepovinné)", Modifier.weight(1f))
+                    OutlinedButton(onClick = {
+                        val panel = app.active
+                        val entry = panel.cursorEntry()
+                        if (panel.loc is Loc.Local && entry != null && !entry.isDirLike) {
+                            identity.value = TextFieldValue(panel.loc.pathOf(entry.name))
+                        } else {
+                            error = "Najeďte v panelu kurzorem na soubor s klíčem a zkuste to znovu."
+                        }
+                    }) { Text("Z kurzoru") }
+                }
+                Field(dir, "Počáteční adresář (prázdné = domovský)")
             }
-            Field(dir, "Počáteční adresář (prázdné = domovský)")
             CheckRow(save, "Ukládat heslo do šifrovaného trezoru") { save = it }
             if (save) {
                 Field(password, if (dialog.hasStoredPassword) "Heslo (uloženo — vyplňte jen pro změnu)" else "Heslo (nepovinné; jinak se zeptá při připojení)", password = true)
                 if (dialog.hasStoredPassword) CheckRow(forget, "Smazat uložené heslo") { forget = it }
             }
             Text(
-                "Při prvním připojení se zobrazí otisk klíče serveru k potvrzení. Soukromý klíč může být ve formátu OpenSSH nebo PEM.",
+                if (protocol == Protocol.Smb) "Sdílená složka Windows nebo NAS (SMB 2/3). Název sdílení je první část adresy, např. \\\\nas\\data → data."
+                else "Při prvním připojení se zobrazí otisk klíče serveru k potvrzení. Soukromý klíč může být ve formátu OpenSSH nebo PEM.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
