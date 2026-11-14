@@ -480,6 +480,8 @@ fun DialogHost(app: AppState) {
                 is Dlg.Unpack -> UnpackDialog(app, dialog)
                 is Dlg.ServerManager -> ServerManagerDialog(app, dialog)
                 is Dlg.ServerEdit -> ServerEditDialog(app, dialog)
+                is Dlg.CloudAccounts -> CloudAccountsDialog(app, dialog)
+                is Dlg.CloudAccountEdit -> CloudAccountEditDialog(app, dialog)
                 is Dlg.Settings -> SettingsDialog(app, dialog)
                 is Dlg.Viewer -> ViewerDialog(app, dialog)
                 is Dlg.Editor -> EditorDialog(app, dialog)

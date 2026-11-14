@@ -38,6 +38,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cz.k4.salamanderdroid.cloud.CloudAccount
+import cz.k4.salamanderdroid.cloud.CloudKind
 import cz.k4.salamanderdroid.core.ArchiveFormat
 import cz.k4.salamanderdroid.core.EntryKind
 import cz.k4.salamanderdroid.core.FindEvent
@@ -54,6 +56,7 @@ import cz.k4.salamanderdroid.core.parseLocalTime
 import cz.k4.salamanderdroid.core.parseOctal
 import cz.k4.salamanderdroid.remote.AuthMethod
 import cz.k4.salamanderdroid.remote.Server
+import cz.k4.salamanderdroid.remote.randomHex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,6 +86,8 @@ fun PlacesDialog(app: AppState, dialog: Dlg.Places) {
         val hotpaths = app.config.hotpaths.withIndex().filter { it.value != null }
         if (hotpaths.isNotEmpty()) list += Place("Klávesové cesty", header = true)
         for ((index, path) in hotpaths) list += Place("Ctrl+$index", path!!) { app.goTyped(path, panel) }
+        if (app.cloudAccounts.isNotEmpty()) list += Place("Cloud", header = true)
+        for (account in app.cloudAccounts) list += Place(account.displayName(), "${account.kind.label} — ${account.user.ifEmpty { "nepřihlášeno" }}") { app.openCloud(account, panel) }
         if (app.servers.isNotEmpty()) list += Place("Servery (SSH/SFTP)", header = true)
         for (server in app.servers) list += Place(server.displayName(), server.label()) { app.connect(server, panel) }
         val history = panel.history().drop(1).take(15)
@@ -313,7 +318,7 @@ fun AttributesDialog(app: AppState, dialog: Dlg.Attributes) {
             CheckRow(changeMode, "Změnit práva") { changeMode = it }
             Field(mode, "Práva osmičkově (např. 644)", autoFocus = true, number = true, mono = true)
         } else {
-            Text("Práva a vlastníka nelze na sdíleném úložišti Androidu měnit; lze nastavit čas změny.", fontSize = 13.sp)
+            if (dialog.loc is Loc.Local) Text("Práva a vlastníka nelze na sdíleném úložišti Androidu měnit; lze nastavit čas změny.", fontSize = 13.sp)
         }
         CheckRow(changeTime, "Změnit čas změny") { changeTime = it }
         Field(time, "Čas změny (RRRR-MM-DD HH:MM:SS)", autoFocus = !remote, mono = true)
@@ -507,6 +512,131 @@ fun ServerEditDialog(app: AppState, dialog: Dlg.ServerEdit) {
             }
             Text(
                 "Při prvním připojení se zobrazí otisk klíče serveru k potvrzení. Soukromý klíč může být ve formátu OpenSSH nebo PEM.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+// ---- Cloud accounts ----
+
+@Composable
+fun CloudAccountsDialog(app: AppState, dialog: Dlg.CloudAccounts) {
+    val accounts = app.cloudAccounts
+    val cursor = remember { mutableIntStateOf(0) }
+    val current = accounts.getOrNull(cursor.intValue)
+    val open = { account: CloudAccount ->
+        if (app.cloudSignedIn(account)) {
+            app.close(dialog)
+            app.openCloud(account)
+        } else {
+            app.signInCloud(account)
+        }
+    }
+    DialogFrame(
+        "Cloudové účty", { app.close(dialog) }, width = 760.dp, focusRoot = accounts.isEmpty(),
+        buttons = {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                Button(enabled = current != null, onClick = { current?.let(open) }) { Text("Otevřít") }
+                OutlinedButton(onClick = { app.editCloudAccount(CloudAccount(randomHex(8), CloudKind.OneDrive, "", ""), creating = true) }) { Text("Nový…") }
+                OutlinedButton(enabled = current != null, onClick = { current?.let { app.editCloudAccount(it, creating = false) } }) { Text("Upravit…") }
+                OutlinedButton(enabled = current != null, onClick = { current?.let { app.signInCloud(it) } }) { Text("Přihlásit znovu") }
+                OutlinedButton(enabled = current != null, onClick = { current?.let { app.removeCloudAccount(it) } }) { Text("Odebrat") }
+                TextButton(onClick = { app.close(dialog) }) { Text("Zavřít") }
+            }
+        },
+    ) {
+        if (accounts.isEmpty()) {
+            Text("Zatím není přidán žádný účet. Tlačítkem „Nový…“ přidáte OneDrive (osobní i firemní) nebo Google Drive.")
+        } else {
+            KeyList(
+                accounts, cursor, onActivate = open,
+                onKey = { event, account ->
+                    when {
+                        event.isDown(Key.F4) && account != null -> { app.editCloudAccount(account, creating = false); true }
+                        event.isDown(Key.Delete) && account != null -> { app.removeCloudAccount(account); true }
+                        else -> false
+                    }
+                },
+                modifier = Modifier.heightIn(max = 360.dp),
+            ) { account, _ ->
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    Text(account.displayName(), fontWeight = FontWeight.Bold)
+                    Text(
+                        "${account.kind.label} — " + (if (app.cloudSignedIn(account)) account.user.ifEmpty { "přihlášeno" } else "nepřihlášeno"),
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Enter otevře účet v aktivním panelu. Každý účet potřebuje vlastní registraci aplikace u Microsoftu nebo Googlu " +
+                "(ID aplikace); postup je v README projektu. Přihlášení probíhá v prohlížeči, aplikace heslo nikdy nevidí.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+fun CloudAccountEditDialog(app: AppState, dialog: Dlg.CloudAccountEdit) {
+    val account = dialog.account
+    var kind by remember { mutableStateOf(account.kind) }
+    val name = remember { fieldOf(account.name) }
+    val clientId = remember { fieldOf(account.clientId) }
+    val secret = remember { fieldOf(account.clientSecret) }
+    val tenant = remember { fieldOf(account.tenant) }
+    var error by remember { mutableStateOf("") }
+    val confirm = confirm@{
+        val edited = account.copy(
+            kind = kind, name = name.value.text.trim(), clientId = clientId.value.text.trim(),
+            clientSecret = if (kind == CloudKind.GoogleDrive) secret.value.text.trim() else "",
+            tenant = tenant.value.text.trim().ifEmpty { "common" },
+        )
+        edited.validate()?.let {
+            error = it
+            return@confirm
+        }
+        if (app.cloudAccounts.any { it.id != edited.id && it.kind == edited.kind && it.pathName() == edited.pathName() }) {
+            error = "Účet s tímto názvem už existuje; zvolte jiný název."
+            return@confirm
+        }
+        app.close(dialog)
+        dialog.onSave(edited)
+    }
+    DialogFrame(
+        if (dialog.creating) "Nový cloudový účet" else "Upravit cloudový účet", { app.close(dialog) }, width = 640.dp, onEnter = confirm,
+        buttons = {
+            TextButton(onClick = { app.close(dialog) }) { Text("Zrušit") }
+            Button(onClick = confirm) { Text(if (dialog.creating) "Uložit a přihlásit" else "Uložit") }
+        },
+    ) {
+        Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (dialog.creating) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (candidate in CloudKind.entries) {
+                        FilterChip(selected = kind == candidate, label = { Text(candidate.label) }, onClick = { kind = candidate })
+                    }
+                }
+            } else {
+                Text(kind.label, fontWeight = FontWeight.Bold)
+            }
+            Field(name, "Název (např. Práce, Soukromý)", autoFocus = true)
+            Field(clientId, if (kind == CloudKind.OneDrive) "ID aplikace (Application/client ID z Microsoft Entra)" else "Client ID (Google Cloud Console)", mono = true)
+            if (kind == CloudKind.GoogleDrive) {
+                Field(secret, "Client secret (klient typu „Desktop app“)", mono = true)
+            } else {
+                Field(tenant, "Tenant (common = osobní i firemní účty)", mono = true)
+            }
+            Text(
+                if (kind == CloudKind.OneDrive) {
+                    "Registrace v Microsoft Entra: typ účtů „libovolná organizace a osobní účty Microsoft“, platforma " +
+                        "„Mobilní a desktopové aplikace“ s adresou přesměrování http://localhost, oprávnění Files.ReadWrite.All."
+                } else {
+                    "Projekt v Google Cloud Console: povolit Google Drive API, OAuth klient typu „Desktop app“, " +
+                        "stav publikování „In production“ (jinak přihlášení po 7 dnech vyprší)."
+                },
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)

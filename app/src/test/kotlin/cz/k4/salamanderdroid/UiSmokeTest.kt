@@ -184,6 +184,17 @@ class UiSmokeTest {
         rule.waitUntil(15_000) { rule.onAllNodesWithText("druhý řádek hledané slovo").fetchSemanticsNodes().isNotEmpty() }
         rule.runOnUiThread { app.dialogs.clear() }
 
+        // The cloud account editor composes for both services and validates its input.
+        rule.runOnUiThread {
+            app.editCloudAccount(cz.k4.salamanderdroid.cloud.CloudAccount("x", cz.k4.salamanderdroid.cloud.CloudKind.GoogleDrive, "", ""), creating = true)
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("Uložit a přihlásit").performClick()
+        rule.onNodeWithText("Zadejte ID aplikace (client ID)").assertIsDisplayed()
+        rule.runOnUiThread { app.dialogs.clear() }
+        rule.waitForIdle()
+        assertEquals(Loc.Cloud(cz.k4.salamanderdroid.cloud.CloudAccount("x", cz.k4.salamanderdroid.cloud.CloudKind.OneDrive, "Práce", "id"), "/a").display(), "onedrive://Práce/a")
+
         // Menus, places, settings, properties, find, servers and help all compose.
         key(KeyEvent.KEYCODE_DEL)
         waitFor { app.active.loc is Loc.Local }
@@ -200,6 +211,7 @@ class UiSmokeTest {
             Triple(KeyEvent.KEYCODE_F2, KeyEvent.META_CTRL_ON, Dlg.Attributes::class),
             Triple(KeyEvent.KEYCODE_F7, KeyEvent.META_ALT_ON, Dlg.Find::class),
             Triple(KeyEvent.KEYCODE_K, KeyEvent.META_CTRL_ON, Dlg.ServerManager::class),
+            Triple(KeyEvent.KEYCODE_K, KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON, Dlg.CloudAccounts::class),
             Triple(KeyEvent.KEYCODE_F1, 0, Dlg.Message::class),
         )) {
             key(code, meta)

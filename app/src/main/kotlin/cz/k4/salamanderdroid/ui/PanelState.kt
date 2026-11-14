@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import cz.k4.salamanderdroid.cloud.CloudAccount
 import cz.k4.salamanderdroid.core.CompareItem
 import cz.k4.salamanderdroid.core.EntryKind
 import cz.k4.salamanderdroid.core.FileEntry
@@ -27,6 +28,7 @@ sealed interface Loc {
     data class Local(val path: String) : Loc
     data class Archive(val archive: String, val inner: String) : Loc
     data class Remote(val server: Server, val path: String) : Loc
+    data class Cloud(val account: CloudAccount, val path: String) : Loc
 
     /** Directory path inside the location's own file system. */
     val dir: String
@@ -34,12 +36,14 @@ sealed interface Loc {
             is Local -> path
             is Archive -> inner
             is Remote -> path
+            is Cloud -> path
         }
 
     fun display(): String = when (this) {
         is Local -> path
         is Archive -> if (inner.isEmpty()) archive else "$archive/$inner"
         is Remote -> "sftp://${server.label()}$path"
+        is Cloud -> "${account.kind.scheme}${account.pathName()}$path"
     }
 
     fun pathOf(name: String): String = joinPath(dir, name)
@@ -48,6 +52,7 @@ sealed interface Loc {
         is Local -> Local(joinPath(path, name))
         is Archive -> Archive(archive, joinPath(inner, name))
         is Remote -> Remote(server, joinPath(path, name))
+        is Cloud -> Cloud(account, joinPath(path, name))
     }
 
     /** Parent location and the name to put the cursor on there. */
@@ -57,6 +62,7 @@ sealed interface Loc {
             if (inner.isEmpty()) Local(parentPath(archive) ?: "/") to File(archive).name
             else Archive(archive, inner.substringBeforeLast('/', "")) to inner.substringAfterLast('/')
         is Remote -> parentPath(path)?.let { Remote(server, it) to path.trimEnd('/').substringAfterLast('/') }
+        is Cloud -> parentPath(path)?.let { Cloud(account, it) to path.trimEnd('/').substringAfterLast('/') }
     }
 }
 

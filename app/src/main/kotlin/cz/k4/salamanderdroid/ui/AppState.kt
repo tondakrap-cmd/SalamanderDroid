@@ -17,6 +17,18 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cz.k4.salamanderdroid.OpService
+import cz.k4.salamanderdroid.cloud.CloudAccount
+import cz.k4.salamanderdroid.cloud.CloudEndpoints
+import cz.k4.salamanderdroid.cloud.CloudFs
+import cz.k4.salamanderdroid.cloud.CloudKind
+import cz.k4.salamanderdroid.cloud.CloudSession
+import cz.k4.salamanderdroid.cloud.CloudStore
+import cz.k4.salamanderdroid.cloud.DriveFs
+import cz.k4.salamanderdroid.cloud.GraphFs
+import cz.k4.salamanderdroid.cloud.KeystoreSealer
+import cz.k4.salamanderdroid.cloud.OAuth
+import cz.k4.salamanderdroid.cloud.OAuthConfig
+import cz.k4.salamanderdroid.cloud.Tokens
 import cz.k4.salamanderdroid.core.ArchiveFormat
 import cz.k4.salamanderdroid.core.ArchiveIndex
 import cz.k4.salamanderdroid.core.Archives
@@ -66,7 +78,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import okhttp3.OkHttpClient
 
 /** Dialogs currently shown, as a stack. Compared by identity. */
 sealed class Dlg {
@@ -96,6 +110,8 @@ sealed class Dlg {
     class Unpack(val count: Int, val destDir: String, val onConfirm: (String, Boolean) -> Unit) : Dlg()
     class ServerManager : Dlg()
     class ServerEdit(val server: Server, val creating: Boolean, val hasStoredPassword: Boolean, val onSave: (Server, String, Boolean) -> Unit) : Dlg()
+    class CloudAccounts : Dlg()
+    class CloudAccountEdit(val account: CloudAccount, val creating: Boolean, val onSave: (CloudAccount) -> Unit) : Dlg()
     class Settings : Dlg()
     class Viewer(val title: String, val content: Rendered) : Dlg()
     class Editor(val title: String, val text: String, val save: suspend (String) -> Unit) : Dlg()
@@ -108,6 +124,7 @@ class Volume(val label: String, val path: String, val primary: Boolean)
 private const val EDIT_LIMIT = 2 * 1024 * 1024
 private const val VAULT_IDLE_MS = 15 * 60 * 1000L
 private const val REMOTE_UNSUPPORTED = "Na vzdáleném serveru tato operace není podporována."
+private const val CLOUD_UNSUPPORTED = "V cloudovém úložišti tato operace není podporována; soubory nejprve stáhněte (F5)."
 private const val ARCHIVE_UNSUPPORTED =
     "V archivu tato operace není podporována. Archiv lze procházet, rozbalovat (F5), " +
         "doplňovat (F5 z druhého panelu) a mazat z něj (F8)."
@@ -169,7 +186,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
             started = true
             viewDir.deleteRecursively()
             fun startLoc(saved: String?): Loc =
-                saved?.takeIf { !it.startsWith("sftp://") }?.let { parseLoc(it, Loc.Local(home)) } ?: Loc.Local(home)
+                saved?.takeIf { !it.contains("://") }?.let { parseLoc(it, Loc.Local(home)) } ?: Loc.Local(home)
             left.navigate(startLoc(config.leftDir), fallback = Loc.Local(home))
             right.navigate(startLoc(config.rightDir), fallback = Loc.Local(home))
             scope.launch {
@@ -293,11 +310,17 @@ class AppState(application: Application) : AndroidViewModel(application) {
             val path = if (wanted.startsWith("/") && !wanted.contains("/../") && !wanted.endsWith("/..")) wanted else fs.canonicalize(wanted)
             Listing(Loc.Remote(target.server, path), fs.list(path), null)
         }
+        is Loc.Cloud -> {
+            val fs = cloudFs(target.account)
+            val path = normalizePath(target.path)
+            Listing(Loc.Cloud(target.account, path), fs.list(path), cloudSpace(fs))
+        }
     }
 
     private fun fsOf(loc: Loc): Fs? = when (loc) {
         is Loc.Local -> LocalFs
         is Loc.Remote -> connections.fs(loc.server)
+        is Loc.Cloud -> cloudFs(loc.account)
         is Loc.Archive -> null
     }
 
@@ -314,6 +337,13 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 .maxByOrNull { it.label().length } ?: return null
             return Loc.Remote(server, rest.removePrefix(server.label()).let { if (it.isEmpty()) "" else normalizePath(it) })
         }
+        for (kind in CloudKind.entries) {
+            if (!typed.startsWith(kind.scheme)) continue
+            val rest = typed.removePrefix(kind.scheme)
+            val account = cloudAccounts.filter { it.kind == kind && (rest == it.pathName() || rest.startsWith(it.pathName() + "/")) }
+                .maxByOrNull { it.pathName().length } ?: return null
+            return Loc.Cloud(account, normalizePath("/" + rest.removePrefix(account.pathName())))
+        }
         val expanded = when {
             typed == "~" -> home
             typed.startsWith("~/") -> joinPath(home, typed.removePrefix("~/"))
@@ -322,6 +352,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         if (!expanded.startsWith("/")) {
             return when (base) {
                 is Loc.Remote -> Loc.Remote(base.server, normalizePath(joinPath(base.path, expanded)))
+                is Loc.Cloud -> Loc.Cloud(base.account, normalizePath(joinPath(base.path, expanded)))
                 is Loc.Archive -> Loc.Archive(base.archive, normalizePath("/" + joinPath(base.inner, expanded)).removePrefix("/"))
                 is Loc.Local -> localLoc(normalizePath(joinPath(base.path, expanded)))
             }
@@ -474,6 +505,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     private fun unsupported(loc: Loc): Boolean {
         when (loc) {
             is Loc.Remote -> showError(REMOTE_UNSUPPORTED)
+            is Loc.Cloud -> showError(CLOUD_UNSUPPORTED)
             is Loc.Archive -> showError(ARCHIVE_UNSUPPORTED)
             is Loc.Local -> return false
         }
@@ -571,21 +603,17 @@ class AppState(application: Application) : AndroidViewModel(application) {
         val title = if (loc is Loc.Archive) "Rozbaluji ${entry.name}" else "Stahuji ${entry.name}"
         runJob(title, reload = false, onDone = { ok -> if (ok) then(target) }) { job ->
             dir.mkdirs()
-            when (loc) {
-                is Loc.Archive -> {
-                    Archives.extractFile(File(loc.archive), loc.pathOf(entry.name), target)
-                    emptyList()
-                }
-                is Loc.Remote -> {
-                    val fs = connections.fs(loc.server)
-                    val transfer = job.transfer(LocalFs)
-                    transfer.totalFiles = 1
-                    transfer.totalBytes = entry.size
-                    val source = loc.pathOf(entry.name)
-                    transfer.putFile(source, target.path, entry.size, entry.modified, null) { fs.openRead(source) }
-                    transfer.errors
-                }
-                is Loc.Local -> emptyList()
+            if (loc is Loc.Archive) {
+                Archives.extractFile(File(loc.archive), loc.pathOf(entry.name), target)
+                emptyList()
+            } else {
+                val fs = fsOf(loc)!!
+                val transfer = job.transfer(LocalFs)
+                transfer.totalFiles = 1
+                transfer.totalBytes = entry.size
+                val source = loc.pathOf(entry.name)
+                transfer.putFile(source, target.path, entry.size, entry.modified, null) { fs.openRead(source) }
+                transfer.errors
             }
         }
     }
@@ -630,8 +658,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 dialogs += Dlg.Editor(entry.name, text) { edited ->
                     withContext(Dispatchers.IO) {
                         file.writeText(edited)
-                        if (loc is Loc.Remote) {
-                            val fs = connections.fs(loc.server)
+                        if (loc !is Loc.Local) {
+                            val fs = fsOf(loc)!!
                             val transfer = Transfer(fs, object : OpListener {
                                 override fun conflict(conflict: Conflict) = ConflictAction.Overwrite
                             }, AtomicBoolean(false))
@@ -641,7 +669,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     }
-                    flash(if (loc is Loc.Remote) "Uloženo a nahráno: ${entry.name}" else "Uloženo: ${entry.name}")
+                    flash(if (loc !is Loc.Local) "Uloženo a nahráno: ${entry.name}" else "Uloženo: ${entry.name}")
                     panel.reload()
                 }
             }
@@ -703,6 +731,11 @@ class AppState(application: Application) : AndroidViewModel(application) {
             is Loc.Remote -> dialogs += Dlg.Confirm("Smazat na serveru", "Trvale smazat $what ze serveru ${loc.server.displayName()}? Tuto akci nelze vrátit.", "Smazat") {
                 runJob("Mažu na serveru") { job ->
                     deleteTrees(connections.fs(loc.server), paths, job.cancel) { job.status(it) }
+                }
+            }
+            is Loc.Cloud -> dialogs += Dlg.Confirm("Smazat v cloudu", "Smazat $what z úložiště ${loc.account.displayName()}? Položky se přesunou do koše služby.", "Smazat") {
+                runJob("Mažu v cloudu") { job ->
+                    deleteTrees(cloudFs(loc.account), paths, job.cancel) { job.status(it) }
                 }
             }
             is Loc.Archive -> dialogs += Dlg.Confirm("Odstranit z archivu", "Odstranit $what z archivu? Archiv se přepíše.", "Odstranit") {
@@ -772,8 +805,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
             }
             else -> {
                 val title = when {
-                    srcLoc is Loc.Remote && target is Loc.Local -> "Stahuji"
-                    srcLoc is Loc.Local && target is Loc.Remote -> "Nahrávám"
+                    srcLoc !is Loc.Local && target is Loc.Local -> "Stahuji"
+                    srcLoc is Loc.Local && target !is Loc.Local -> "Nahrávám"
                     kind == OpKind.Copy -> "Kopíruji"
                     else -> "Přesouvám"
                 }
@@ -944,6 +977,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         val loc = panel.loc
         when (loc) {
             is Loc.Remote -> return showError(REMOTE_UNSUPPORTED)
+            is Loc.Cloud -> return showError(CLOUD_UNSUPPORTED)
             // Inside an archive Alt+F9 extracts the selection, like F5.
             is Loc.Archive -> return copyMove(OpKind.Copy)
             is Loc.Local -> {}
@@ -1187,6 +1221,102 @@ class AppState(application: Application) : AndroidViewModel(application) {
         scope.launch {
             val text = withContext(Dispatchers.IO) { remoteLog.tail() }
             dialogs += Dlg.Message("Log vzdálených operací", text.ifEmpty { "Log je prázdný." }, mono = true)
+        }
+    }
+
+    // ---- Cloud drives (OneDrive, Google Drive) ----
+
+    private val cloudStore = CloudStore(File(context.filesDir, "cloud.json"), KeystoreSealer())
+    var cloudAccounts by mutableStateOf(cloudStore.accounts())
+        private set
+    private val cloudHttp by lazy {
+        OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(90, TimeUnit.SECONDS).writeTimeout(90, TimeUnit.SECONDS).build()
+    }
+    private val cloudEndpoints = CloudEndpoints()
+    private val cloudSessions = HashMap<String, CloudFs>()
+    private val cloudSpaces = HashMap<String, Pair<Long, Pair<Long, Long>?>>()
+
+    fun cloudSignedIn(account: CloudAccount): Boolean = cloudStore.tokens(account.id) != null
+
+    private fun newCloudFs(account: CloudAccount, tokens: Tokens): CloudFs {
+        val session = CloudSession(cloudHttp, OAuthConfig.of(account, cloudEndpoints), tokens) { cloudStore.setTokens(account.id, it) }
+        val temp = File(context.cacheDir, "upload")
+        return when (account.kind) {
+            CloudKind.OneDrive -> GraphFs(account, session, temp, cloudEndpoints.graph)
+            CloudKind.GoogleDrive -> DriveFs(account, session, temp, cloudEndpoints.drive, cloudEndpoints.driveUpload)
+        }
+    }
+
+    private fun cloudFs(account: CloudAccount): CloudFs = synchronized(cloudSessions) {
+        cloudSessions.getOrPut(account.id) {
+            val tokens = cloudStore.tokens(account.id)
+                ?: throw IOException("Účet ${account.displayName()} není přihlášen (Vzdálené → Cloudové účty → Přihlásit)")
+            newCloudFs(account, tokens)
+        }
+    }
+
+    /** Free and total space, asked at most once a minute per account. */
+    private fun cloudSpace(fs: CloudFs): Pair<Long, Long>? = synchronized(cloudSpaces) {
+        val cached = cloudSpaces[fs.account.id]
+        if (cached != null && System.currentTimeMillis() - cached.first < 60_000) return cached.second
+        val space = fs.space()
+        cloudSpaces[fs.account.id] = System.currentTimeMillis() to space
+        space
+    }
+
+    fun cloudAccountsDialog() {
+        dialogs += Dlg.CloudAccounts()
+    }
+
+    fun openCloud(account: CloudAccount, panel: PanelState = active) {
+        panel.navigate(Loc.Cloud(account, "/"))
+    }
+
+    private fun leaveCloud(id: String) {
+        synchronized(cloudSessions) { cloudSessions.remove(id) }
+        for (panel in listOf(left, right)) {
+            if ((panel.loc as? Loc.Cloud)?.account?.id == id) panel.navigate(Loc.Local(home))
+        }
+    }
+
+    fun editCloudAccount(account: CloudAccount, creating: Boolean) {
+        dialogs += Dlg.CloudAccountEdit(account, creating) { edited ->
+            leaveCloud(edited.id)
+            // A changed application registration invalidates the stored sign-in.
+            val keep = !creating && edited.clientId == account.clientId && edited.clientSecret == account.clientSecret && edited.tenant == account.tenant
+            cloudStore.put(edited, if (keep) cloudStore.tokens(account.id) else null)
+            cloudAccounts = cloudStore.accounts()
+            if (!keep) signInCloud(edited)
+        }
+    }
+
+    /** Opens the system browser for sign-in and waits for it to come back. */
+    fun signInCloud(account: CloudAccount) {
+        runJob("Přihlášení: ${account.displayName()}", reload = false, onDone = { ok ->
+            cloudAccounts = cloudStore.accounts()
+            if (ok) flash("Přihlášeno: ${cloudAccounts.firstOrNull { it.id == account.id }?.user.orEmpty()}")
+        }) { job ->
+            job.status("Dokončete přihlášení v prohlížeči a vraťte se do aplikace…")
+            val tokens = OAuth.authorize(cloudHttp, OAuthConfig.of(account, cloudEndpoints), { url ->
+                context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }, job.cancel)
+            cloudStore.put(account, tokens)
+            synchronized(cloudSessions) { cloudSessions.remove(account.id) }
+            val user = try {
+                newCloudFs(account, tokens).userName()
+            } catch (_: IOException) {
+                ""
+            }
+            cloudStore.put(account.copy(user = user), cloudStore.tokens(account.id))
+            emptyList()
+        }
+    }
+
+    fun removeCloudAccount(account: CloudAccount) {
+        dialogs += Dlg.Confirm("Odebrat účet", "Odebrat účet ${account.displayName()} z aplikace? Soubory v cloudu zůstanou.", "Odebrat") {
+            leaveCloud(account.id)
+            cloudStore.remove(account.id)
+            cloudAccounts = cloudStore.accounts()
         }
     }
 

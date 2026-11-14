@@ -96,6 +96,7 @@ fun handleKey(app: AppState, event: KeyEvent): Boolean {
         code == KeyEvent.KEYCODE_U && ctrl -> app.swapPanels()
         code == KeyEvent.KEYCODE_H && ctrl -> app.updateConfig { it.copy(showHidden = !it.showHidden) }
         code == KeyEvent.KEYCODE_R && ctrl -> panel.reload(quiet = false)
+        code == KeyEvent.KEYCODE_K && ctrl && shift -> app.cloudAccountsDialog()
         code == KeyEvent.KEYCODE_K && ctrl -> app.serverManager()
         code == KeyEvent.KEYCODE_COMMA && ctrl -> app.dialogs += Dlg.Settings()
         code == KeyEvent.KEYCODE_Q && ctrl -> app.onExit()
@@ -170,6 +171,11 @@ Vzdálené servery (SSH/SFTP)
   Ctrl+K — správce serverů a připojení; servery jsou i v Alt+F1/Alt+F2
   F5/F6 — stáhnout nebo nahrát (přesunout); F4 — upravit, uložení se nahraje zpět
   F2, F7, Shift+F4, F8 — přejmenovat, složka, soubor, smazat; Ctrl+F2 — oprávnění
+
+Cloud (OneDrive, Google Drive)
+  Ctrl+Shift+K — cloudové účty; účty jsou i v Alt+F1/Alt+F2
+  F5/F6 — stáhnout nebo nahrát, i mezi cloudem a serverem; F3, F4, F2, F7, F8 jako jinde
+  smazané položky se přesunou do koše služby
 
 Prohlížeč (F3)
   Ctrl+F / F7 hledat, F3 / Shift+F3 další / předchozí, H text/hex, W zalamování, Esc zavřít

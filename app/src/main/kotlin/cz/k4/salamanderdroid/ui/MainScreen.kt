@@ -171,6 +171,7 @@ private fun menus(app: AppState): List<Pair<String, List<MenuItem?>>> {
         "Vzdálené" to listOf(
             MenuItem("Připojit k serveru…", "Ctrl+K") { app.serverManager() },
             MenuItem("Odpojit") { app.disconnectActive() },
+            MenuItem("Cloudové účty (OneDrive, Google Drive)…", "Ctrl+Shift+K") { app.cloudAccountsDialog() },
             null,
             MenuItem("Log vzdálených operací") { app.showRemoteLog() },
             MenuItem("Zamknout trezor hesel") { app.lockVault() },
