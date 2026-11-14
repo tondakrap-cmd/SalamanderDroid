@@ -403,10 +403,17 @@ class AppState(application: Application) : AndroidViewModel(application) {
         val cancel = AtomicBoolean(false)
         jobCancel = cancel
         progress = ProgressUi(title, "", "", null)
-        try {
-            context.startForegroundService(Intent(context, OpService::class.java))
-        } catch (_: Exception) {
-            // Without the service the job still runs, only less protected in the background.
+        // Only longer jobs get the foreground service; starting and stopping it within a few
+        // milliseconds is not allowed by the system.
+        var serviceStarted = false
+        val serviceJob = scope.launch {
+            delay(1500)
+            try {
+                context.startForegroundService(Intent(context, OpService::class.java))
+                serviceStarted = true
+            } catch (_: Exception) {
+                // Without the service the job still runs, only less protected in the background.
+            }
         }
         scope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -419,7 +426,15 @@ class AppState(application: Application) : AndroidViewModel(application) {
             busy = false
             jobCancel = null
             progress = null
-            context.stopService(Intent(context, OpService::class.java))
+            serviceJob.cancel()
+            if (serviceStarted) {
+                // The service stops itself, so it always gets to enter the foreground first.
+                try {
+                    context.startService(Intent(context, OpService::class.java).setAction(OpService.ACTION_STOP))
+                } catch (_: Exception) {
+                    context.stopService(Intent(context, OpService::class.java))
+                }
+            }
             if (reload) {
                 active.reload(focus = focus)
                 other.reload()

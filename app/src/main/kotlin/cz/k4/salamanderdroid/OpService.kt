@@ -27,10 +27,15 @@ class OpService : Service() {
         } catch (_: Exception) {
             stopSelf()
         }
+        if (intent?.action == ACTION_STOP) {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
         return START_NOT_STICKY
     }
 
-    private companion object {
-        const val CHANNEL = "operations"
+    companion object {
+        const val ACTION_STOP = "cz.k4.salamanderdroid.STOP"
+        private const val CHANNEL = "operations"
     }
 }
