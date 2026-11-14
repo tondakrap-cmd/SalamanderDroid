@@ -167,6 +167,13 @@ class AppState(application: Application) : AndroidViewModel(application) {
     var pathEditing by mutableStateOf(false)
     var menuOpen by mutableStateOf(false)
 
+    /** A context menu is open; like the menu bar it handles its own keys. */
+    var popupOpen by mutableStateOf(false)
+
+    /** The inactive panel shows a preview of the file under the cursor (Ctrl+P). */
+    var quickView by mutableStateOf(false)
+    var onNewWindow: () -> Unit = {}
+
     /** Index of a menu to open from the keyboard (F9), or -1. */
     var menuRequest by mutableStateOf(-1)
     var onExit: () -> Unit = {}
@@ -1221,6 +1228,82 @@ class AppState(application: Application) : AndroidViewModel(application) {
         scope.launch {
             val text = withContext(Dispatchers.IO) { remoteLog.tail() }
             dialogs += Dlg.Message("Log vzdálených operací", text.ifEmpty { "Log je prázdný." }, mono = true)
+        }
+    }
+
+    // ---- Sharing with other apps ----
+
+    private fun shareUris(panel: PanelState): List<android.net.Uri>? {
+        val loc = panel.loc as? Loc.Local ?: return null
+        return panel.selectedEntries().filter { !it.isDirLike }.map {
+            FileProvider.getUriForFile(context, "${context.packageName}.files", File(loc.pathOf(it.name)))
+        }
+    }
+
+    /** Sends the selected local files to another app (share sheet). */
+    fun share() {
+        val uris = shareUris(active)
+            ?: return showError("Sdílet lze jen místní soubory; z archivu, serveru nebo cloudu je nejprve zkopírujte (F5).")
+        if (uris.isEmpty()) return flash("Sdílet lze soubory, ne složky")
+        val intent = if (uris.size == 1) {
+            Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
+                .setType(mimeOf(active.selectedEntries().first { !it.isDirLike }.name) ?: "*/*")
+        } else {
+            Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris)).setType("*/*")
+        }
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try {
+            context.startActivity(Intent.createChooser(intent, "Sdílet").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (error: Exception) {
+            showError("Sdílení selhalo: ${error.message}")
+        }
+    }
+
+    /** Clip for dragging the selected local files into another window, or null. */
+    fun dragClip(panel: PanelState): ClipData? {
+        val uris = shareUris(panel)?.takeIf { it.isNotEmpty() } ?: return null
+        val clip = ClipData.newUri(context.contentResolver, "soubory", uris[0])
+        for (uri in uris.drop(1)) clip.addItem(ClipData.Item(uri))
+        return clip
+    }
+
+    /** Saves files handed over by another app (share, drag and drop) into a panel's directory. */
+    fun receiveUris(uris: List<android.net.Uri>, panel: PanelState = active) {
+        if (uris.isEmpty()) return
+        val loc = panel.loc
+        if (loc is Loc.Archive) return showError("Do archivu nelze ukládat přímo; přepněte panel do běžné složky.")
+        val what = if (uris.size == 1) "1 soubor" else "${uris.size} souborů"
+        dialogs += Dlg.Confirm("Uložit soubory", "Uložit $what do ${loc.display()}?", "Uložit") {
+            runJob("Ukládám") { job ->
+                val resolver = context.contentResolver
+                val fs = fsOf(loc)!!
+                val transfer = job.transfer(fs)
+                val items = uris.mapIndexed { index, uri ->
+                    var name = uri.lastPathSegment?.substringAfterLast('/') ?: "soubor${index + 1}"
+                    var size = -1L
+                    try {
+                        resolver.query(uri, null, null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val nameColumn = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                                val sizeColumn = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                                if (nameColumn >= 0) cursor.getString(nameColumn)?.let { name = it }
+                                if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) size = cursor.getLong(sizeColumn)
+                            }
+                        }
+                    } catch (_: Exception) {
+                    }
+                    Triple(uri, name.replace('/', '_'), size)
+                }
+                transfer.totalFiles = items.size.toLong()
+                transfer.totalBytes = items.sumOf { maxOf(it.third, 0) }
+                for ((uri, name, size) in items) {
+                    if (job.cancel.get()) break
+                    transfer.putFile(name, joinPath(loc.dir, name), size, null, null) {
+                        resolver.openInputStream(uri) ?: throw IOException("Soubor nelze otevřít")
+                    }
+                }
+                transfer.errors
+            }
         }
     }
 

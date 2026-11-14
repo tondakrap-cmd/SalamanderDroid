@@ -125,13 +125,13 @@ class Transfer(
             dst.stat(target)
         } catch (error: IOException) {
             fail(target, error)
-            skipped(source, 1, size)
+            skipped(source, 1, maxOf(size, 0))
             return false
         }
         if (existing != null) {
             if (existing.kind == EntryKind.Directory) {
                 fail(target, "Cíl je adresář")
-                skipped(source, 1, size)
+                skipped(source, 1, maxOf(size, 0))
                 return false
             }
             val action = when {
@@ -147,7 +147,7 @@ class Transfer(
             }
             if (action == ConflictAction.Abort) return false
             if (action == ConflictAction.Skip || action == ConflictAction.SkipAll) {
-                skipped(source, 1, size)
+                skipped(source, 1, maxOf(size, 0))
                 return false
             }
         }
@@ -179,7 +179,7 @@ class Transfer(
                 } catch (_: Exception) {
                 }
             }
-            doneBytes = startBytes + size
+            if (size >= 0) doneBytes = startBytes + size
             doneFiles++
             if (error !is CancelledException) fail(source, error)
             return false
@@ -190,7 +190,7 @@ class Transfer(
         } catch (_: Exception) {
             // Timestamps and permissions are best effort (e.g. FAT or Android shared storage).
         }
-        doneBytes = startBytes + size
+        if (size >= 0) doneBytes = startBytes + size
         doneFiles++
         emit(source)
         return true

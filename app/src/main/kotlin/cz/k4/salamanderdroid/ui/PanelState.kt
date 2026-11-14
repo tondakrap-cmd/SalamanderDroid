@@ -253,6 +253,12 @@ class PanelState(private val app: AppState, start: Loc) {
         marked = if (entry.name in marked) marked - entry.name else marked + entry.name
     }
 
+    /** Marks every row between two positions (Shift+click). */
+    fun markRange(from: Int, to: Int) {
+        val names = (minOf(from, to)..maxOf(from, to)).mapNotNull { rows.getOrNull(it) }.filter { !it.isParent }.map { it.name }
+        marked = marked + names
+    }
+
     fun toggleMarkAndAdvance() {
         toggleMark(cursor)
         moveCursorBy(1)

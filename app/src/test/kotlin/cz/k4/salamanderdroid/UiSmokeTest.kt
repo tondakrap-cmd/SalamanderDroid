@@ -8,6 +8,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.rightClick
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.hasSetTextAction
@@ -89,6 +91,12 @@ class UiSmokeTest {
     @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
     private fun pressEnterInDialog() {
         rule.onNode(hasSetTextAction()).performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+        rule.waitForIdle()
+    }
+
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    private fun rightClickRow(name: String) {
+        rule.onAllNodesWithText(name)[0].performMouseInput { rightClick() }
         rule.waitForIdle()
     }
 
@@ -184,6 +192,49 @@ class UiSmokeTest {
         rule.waitUntil(15_000) { rule.onAllNodesWithText("druhý řádek hledané slovo").fetchSemanticsNodes().isNotEmpty() }
         rule.runOnUiThread { app.dialogs.clear() }
 
+        // Leave the archive again.
+        key(KeyEvent.KEYCODE_DEL)
+        waitFor { app.active.loc is Loc.Local }
+
+        // Quick view shows the file under the cursor in place of the other panel.
+        cursorTo("alpha.txt")
+        key(KeyEvent.KEYCODE_P, KeyEvent.META_CTRL_ON)
+        rule.waitUntil(15_000) { rule.onAllNodesWithText("druhý řádek hledané slovo").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Rychlé zobrazení: alpha.txt").assertIsDisplayed()
+        key(KeyEvent.KEYCODE_P, KeyEvent.META_CTRL_ON)
+        assertTrue(!app.quickView)
+
+        // Right mouse button opens the context menu for that row.
+        rightClickRow("docs")
+        assertEquals("docs", app.active.cursorEntry()!!.name)
+        assertTrue(app.popupOpen)
+        rule.onNodeWithText("Vlastnosti (Alt+Enter)").performClick()
+        rule.waitForIdle()
+        assertTrue(app.dialogs.single() is Dlg.Properties && !app.popupOpen)
+        rule.runOnUiThread { app.dialogs.clear() }
+        rule.waitForIdle()
+
+        // Shift+click style range marking.
+        rule.runOnUiThread {
+            app.active.clearMarks()
+            app.active.markRange(app.active.rows.indexOfFirst { it.name == "docs" }, app.active.rows.size - 1)
+        }
+        assertTrue(app.active.marked.containsAll(listOf("docs", "alpha.txt")))
+        rule.runOnUiThread { app.active.clearMarks() }
+
+        // Files handed over by another app are saved into the active panel after confirmation.
+        val outside = File(root.parentFile, "shared-in.txt").apply { writeText("ze sdílení") }
+        rule.runOnUiThread { app.receiveUris(listOf(android.net.Uri.fromFile(outside))) }
+        rule.waitForIdle()
+        rule.onNodeWithText("Uložit 1 soubor do ${root.path}?").assertIsDisplayed()
+        rule.onNode(
+            androidx.compose.ui.test.hasText("Uložit") and androidx.compose.ui.test.SemanticsMatcher.expectValue(
+                androidx.compose.ui.semantics.SemanticsProperties.Role, androidx.compose.ui.semantics.Role.Button,
+            )
+        ).performClick()
+        waitFor { File(root, "shared-in.txt").isFile && !app.busy }
+        assertEquals("ze sdílení", File(root, "shared-in.txt").readText())
+
         // The cloud account editor composes for both services and validates its input.
         rule.runOnUiThread {
             app.editCloudAccount(cz.k4.salamanderdroid.cloud.CloudAccount("x", cz.k4.salamanderdroid.cloud.CloudKind.GoogleDrive, "", ""), creating = true)
@@ -196,8 +247,6 @@ class UiSmokeTest {
         assertEquals(Loc.Cloud(cz.k4.salamanderdroid.cloud.CloudAccount("x", cz.k4.salamanderdroid.cloud.CloudKind.OneDrive, "Práce", "id"), "/a").display(), "onedrive://Práce/a")
 
         // Menus, places, settings, properties, find, servers and help all compose.
-        key(KeyEvent.KEYCODE_DEL)
-        waitFor { app.active.loc is Loc.Local }
         rule.onAllNodesWithText("Zobrazit")[0].performClick()
         rule.onNodeWithText("Řadit podle velikosti", substring = true).performClick()
         rule.waitForIdle()

@@ -1,6 +1,26 @@
 package cz.k4.salamanderdroid.ui
 
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Point
+import android.view.View
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.toAndroidDragEvent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.isPrimaryPressed
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.isShiftPressed
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -71,9 +91,13 @@ fun MainScreen(app: AppState) {
             // On a phone-sized window only the active panel is shown; Tab (or ⇄) switches.
             val narrow = maxWidth < 600.dp
             Row(Modifier.fillMaxSize()) {
-                if (!narrow || app.leftActive) PanelView(app, app.left, Modifier.weight(1f))
+                // Quick view replaces the inactive panel with a preview of the file under the cursor.
+                val preview = app.quickView && !narrow
+                if (preview && !app.leftActive) QuickViewPane(app, Modifier.weight(1f))
+                else if (!narrow || app.leftActive) PanelView(app, app.left, Modifier.weight(1f))
                 if (!narrow) Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
-                if (!narrow || !app.leftActive) PanelView(app, app.right, Modifier.weight(1f))
+                if (preview && app.leftActive) QuickViewPane(app, Modifier.weight(1f))
+                else if (!narrow || !app.leftActive) PanelView(app, app.right, Modifier.weight(1f))
             }
         }
         if (app.config.showButtonBar) ButtonBar(app)
@@ -114,6 +138,7 @@ private fun menus(app: AppState): List<Pair<String, List<MenuItem?>>> {
             MenuItem("Zabalit…", "Alt+F5") { app.pack() },
             MenuItem("Rozbalit…", "Alt+F9") { app.unpack() },
             MenuItem("Otevřít v aplikaci…", "Shift+Enter") { app.openExternal() },
+            MenuItem("Sdílet…", "Ctrl+S") { app.share() },
             null,
             MenuItem("Ukončit", "Ctrl+Q") { app.onExit() },
         ),
@@ -154,6 +179,8 @@ private fun menus(app: AppState): List<Pair<String, List<MenuItem?>>> {
             MenuItem("Přepnout panel", "Tab") { app.switchPanel() },
             MenuItem("Zobrazit skryté položky", "Ctrl+H", config.showHidden) { app.updateConfig { it.copy(showHidden = !it.showHidden) } },
             MenuItem("Obnovit panel", "Ctrl+R") { panel.reload(quiet = false) },
+            MenuItem("Rychlé zobrazení", "Ctrl+P", app.quickView) { app.quickView = !app.quickView },
+            MenuItem("Nové okno", "Ctrl+N") { app.onNewWindow() },
             null,
             MenuItem("Řadit podle jména", "Ctrl+F3", panel.sortKey == SortKey.Name) { app.sortBy(SortKey.Name) },
             MenuItem("Řadit podle přípony", "Ctrl+F4", panel.sortKey == SortKey.Extension) { app.sortBy(SortKey.Extension) },
@@ -333,6 +360,10 @@ private fun PanelView(app: AppState, panel: PanelState, modifier: Modifier) {
             }
             HorizontalDivider()
 
+            val view = LocalView.current
+            val mouse = remember { MouseState() }
+            var contextRow by remember { mutableIntStateOf(-1) }
+            var contextOffset by remember { mutableStateOf(0f) }
             val rows = panel.rows
             val cursor = panel.cursor
             val marked = panel.marked
@@ -347,7 +378,11 @@ private fun PanelView(app: AppState, panel: PanelState, modifier: Modifier) {
                 if (cursor < first) panel.listState.scrollToItem(cursor)
                 else if (cursor > last) panel.listState.scrollToItem(maxOf(cursor - full.size + 1, 0))
             }
-            LazyColumn(state = panel.listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
+            val dropTarget = remember(panel) { fileDropTarget(app, panel, view) }
+            LazyColumn(
+                state = panel.listState,
+                modifier = Modifier.weight(1f).fillMaxWidth().dragAndDropTarget(shouldStartDragAndDrop = { true }, target = dropTarget),
+            ) {
                 itemsIndexed(rows, key = { _, entry -> if (entry.isParent) "\u0000.." else entry.name }) { index, entry ->
                     val isCursor = index == cursor
                     val isMarked = entry.name in marked && !entry.isParent
@@ -371,6 +406,43 @@ private fun PanelView(app: AppState, panel: PanelState, modifier: Modifier) {
                                     else -> Color.Transparent
                                 }
                             )
+                            .pointerInput(index, entry.name) {
+                                awaitPointerEventScope {
+                                    var pressAt: Offset? = null
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        val change = event.changes.firstOrNull() ?: continue
+                                        when (event.type) {
+                                            PointerEventType.Press -> {
+                                                mouse.ctrl = event.keyboardModifiers.isCtrlPressed
+                                                mouse.shift = event.keyboardModifiers.isShiftPressed
+                                                pressAt = if (change.type == PointerType.Mouse && event.buttons.isPrimaryPressed) change.position else null
+                                                if (event.buttons.isSecondaryPressed) {
+                                                    // Right click: cursor to the row, then the context menu.
+                                                    event.changes.forEach { it.consume() }
+                                                    activate()
+                                                    panel.quickSearchEnd()
+                                                    panel.moveCursor(index)
+                                                    contextOffset = change.position.x
+                                                    contextRow = index
+                                                    app.popupOpen = true
+                                                }
+                                            }
+                                            PointerEventType.Move -> {
+                                                val start = pressAt
+                                                if (start != null && event.buttons.isPrimaryPressed && (change.position - start).getDistance() > 24f) {
+                                                    // Mouse drag: hand the files to whatever window they are dropped on.
+                                                    pressAt = null
+                                                    activate()
+                                                    if (entry.name !in panel.marked) panel.moveCursor(index)
+                                                    startFileDrag(app, panel, view)
+                                                }
+                                            }
+                                            PointerEventType.Release -> pressAt = null
+                                        }
+                                    }
+                                }
+                            }
                             .combinedClickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
@@ -378,7 +450,18 @@ private fun PanelView(app: AppState, panel: PanelState, modifier: Modifier) {
                                     val wasActive = app.active === panel
                                     activate()
                                     panel.quickSearchEnd()
-                                    if (wasActive && panel.cursor == index) app.activateEntry(panel) else panel.moveCursor(index)
+                                    when {
+                                        mouse.ctrl -> {
+                                            panel.moveCursor(index)
+                                            panel.toggleMark(index)
+                                        }
+                                        mouse.shift -> {
+                                            panel.markRange(panel.cursor, index)
+                                            panel.moveCursor(index)
+                                        }
+                                        wasActive && panel.cursor == index -> app.activateEntry(panel)
+                                        else -> panel.moveCursor(index)
+                                    }
                                 },
                                 onLongClick = {
                                     activate()
@@ -389,6 +472,12 @@ private fun PanelView(app: AppState, panel: PanelState, modifier: Modifier) {
                             .padding(horizontal = 6.dp, vertical = 3.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (contextRow == index) {
+                            ContextMenu(app, entry, with(LocalDensity.current) { contextOffset.toDp() }) {
+                                contextRow = -1
+                                app.popupOpen = false
+                            }
+                        }
                         Text(iconOf(entry), fontSize = font, modifier = Modifier.width(unit * 1.9f))
                         Text(entry.name, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         if (showExt) Text(entry.extension, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(extWidth))
@@ -410,6 +499,91 @@ private fun PanelView(app: AppState, panel: PanelState, modifier: Modifier) {
                 panel.statusText(), fontSize = small, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 1.dp),
             )
+        }
+    }
+}
+
+/** Keyboard modifiers at the last pointer press, for Ctrl+click and Shift+click. */
+private class MouseState {
+    var ctrl = false
+    var shift = false
+}
+
+/** Identifies a drag that started in one of our own panels. */
+private class DragOrigin(val panel: PanelState)
+
+private fun startFileDrag(app: AppState, panel: PanelState, view: View) {
+    val clip = app.dragClip(panel) ?: return
+    val count = clip.itemCount
+    val shadow = object : View.DragShadowBuilder() {
+        private val paint = Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = 36f
+            isAntiAlias = true
+        }
+        private val back = Paint().apply { color = 0xCC1F4E79.toInt() }
+
+        override fun onProvideShadowMetrics(size: Point, touch: Point) {
+            size.set(360, 80)
+            touch.set(20, 40)
+        }
+
+        override fun onDrawShadow(canvas: Canvas) {
+            canvas.drawRoundRect(0f, 0f, 360f, 80f, 16f, 16f, back)
+            canvas.drawText(if (count == 1) "1 soubor" else "$count souborů", 24f, 52f, paint)
+        }
+    }
+    try {
+        view.startDragAndDrop(clip, shadow, DragOrigin(panel), View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
+    } catch (_: Exception) {
+        // Dragging is a convenience; F5 and sharing still work.
+    }
+}
+
+private fun fileDropTarget(app: AppState, panel: PanelState, view: View) = object : DragAndDropTarget {
+    override fun onDrop(event: DragAndDropEvent): Boolean {
+        val drag = event.toAndroidDragEvent()
+        // Dropping onto the panel the drag started from does nothing.
+        if ((drag.localState as? DragOrigin)?.panel === panel) return false
+        val clip = drag.clipData ?: return false
+        val uris = (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
+        if (uris.isEmpty()) return false
+        try {
+            (view.context as? android.app.Activity)?.requestDragAndDropPermissions(drag)
+        } catch (_: Exception) {
+        }
+        app.receiveUris(uris, panel)
+        return true
+    }
+}
+
+@Composable
+private fun ContextMenu(app: AppState, entry: FileEntry, offset: androidx.compose.ui.unit.Dp, dismiss: () -> Unit) {
+    val items: List<Pair<String, () -> Unit>?> = listOf(
+        "Otevřít" to { app.activateEntry() },
+        "Otevřít v aplikaci…" to { app.openExternal() },
+        "Zobrazit (F3)" to { app.view() },
+        "Upravit (F4)" to { app.edit() },
+        null,
+        "Kopírovat… (F5)" to { app.copyMove(OpKind.Copy) },
+        "Přesunout… (F6)" to { app.copyMove(OpKind.Move) },
+        "Přejmenovat… (F2)" to { app.rename() },
+        "Smazat (F8)" to { app.remove(permanent = false) },
+        null,
+        "Sdílet…" to { app.share() },
+        "Zabalit… (Alt+F5)" to { app.pack() },
+        "Vlastnosti (Alt+Enter)" to { app.properties() },
+    )
+    DropdownMenu(expanded = true, onDismissRequest = dismiss, offset = DpOffset(offset, 0.dp)) {
+        for (item in items) {
+            if (item == null) {
+                HorizontalDivider()
+            } else if (!entry.isParent || item.first == "Otevřít") {
+                DropdownMenuItem(text = { Text(item.first) }, onClick = {
+                    dismiss()
+                    item.second()
+                })
+            }
         }
     }
 }

@@ -100,6 +100,9 @@ fun handleKey(app: AppState, event: KeyEvent): Boolean {
         code == KeyEvent.KEYCODE_K && ctrl -> app.serverManager()
         code == KeyEvent.KEYCODE_COMMA && ctrl -> app.dialogs += Dlg.Settings()
         code == KeyEvent.KEYCODE_Q && ctrl -> app.onExit()
+        code == KeyEvent.KEYCODE_P && ctrl -> app.quickView = !app.quickView
+        code == KeyEvent.KEYCODE_S && ctrl -> app.share()
+        code == KeyEvent.KEYCODE_N && ctrl -> app.onNewWindow()
         code == KeyEvent.KEYCODE_F1 && alt -> app.places(app.left)
         code == KeyEvent.KEYCODE_F2 && alt -> app.places(app.right)
         code == KeyEvent.KEYCODE_F1 && plain -> app.showShortcuts()
@@ -165,7 +168,9 @@ Archivy (zip, tar, tar.gz/xz/zst/bz2, 7z; jen čtení: cpio, ar/deb)
 
 Zobrazení a nástroje
   Ctrl+H skryté soubory, Ctrl+R obnovit, Ctrl+F3…F6 řadit jméno/přípona/čas/velikost
-  Alt+F7 hledat soubory, Ctrl+, nastavení, F9 nabídka, Ctrl+Q konec
+  Ctrl+P rychlé zobrazení (náhled souboru pod kurzorem v druhém panelu)
+  Alt+F7 hledat soubory, Ctrl+, nastavení, F9 nabídka, Ctrl+N nové okno, Ctrl+Q konec
+  Ctrl+S sdílet vybrané soubory do jiné aplikace
 
 Vzdálené servery (SSH/SFTP)
   Ctrl+K — správce serverů a připojení; servery jsou i v Alt+F1/Alt+F2
@@ -181,6 +186,11 @@ Prohlížeč (F3)
   Ctrl+F / F7 hledat, F3 / Shift+F3 další / předchozí, H text/hex, W zalamování, Esc zavřít
 Editor (F4)
   Ctrl+S / F2 uložit, Esc zavřít
+
+Myš a trackpad
+  klik — kurzor, klik na kurzor — otevřít, pravé tlačítko — místní nabídka
+  Ctrl+klik — označit, Shift+klik — označit rozsah
+  tažení souborů do jiného okna nebo druhého panelu; puštění souborů z jiné aplikace je uloží do panelu
 
 Dotykové ovládání
   klepnutí — kurzor, klepnutí na kurzor — otevřít, dlouhý stisk — označit

@@ -29,6 +29,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.core.content.IntentCompat
 import androidx.core.net.toUri
 import cz.k4.salamanderdroid.ui.AppState
 import cz.k4.salamanderdroid.ui.DialogHost
@@ -43,6 +44,15 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         app.onExit = { finish() }
+        app.onNewWindow = {
+            // A second, independent window (side by side where the system allows it).
+            startActivity(
+                Intent(this, MainActivity::class.java).addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
+                )
+            )
+        }
+        if (savedInstanceState == null) handleShared(intent)
         setContent {
             val dark = isSystemInDarkTheme()
             val scheme = when {
@@ -85,9 +95,30 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShared(intent)
+    }
+
+    /** Files sent from another app ("Share") are offered for saving into the active panel. */
+    private fun handleShared(intent: Intent?) {
+        val uris: List<android.net.Uri> = when (intent?.action) {
+            Intent.ACTION_SEND -> listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, android.net.Uri::class.java))
+            Intent.ACTION_SEND_MULTIPLE -> IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, android.net.Uri::class.java).orEmpty()
+            else -> emptyList()
+        }
+        if (uris.isNotEmpty()) pendingShared = uris
+    }
+
+    private var pendingShared: List<android.net.Uri>? = null
+
     override fun onResume() {
         super.onResume()
         app.checkStorageAccess()
+        if (app.hasStorageAccess) {
+            pendingShared?.let { app.receiveUris(it) }
+            pendingShared = null
+        }
     }
 
     override fun onPause() {
@@ -103,7 +134,7 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val ours = app.hasStorageAccess && app.dialogs.isEmpty() && app.progress == null &&
-            !app.pathEditing && !app.menuOpen && !event.isSystem && !event.isMetaPressed
+            !app.pathEditing && !app.menuOpen && !app.popupOpen && !event.isSystem && !event.isMetaPressed
         if (ours) {
             if (event.action == KeyEvent.ACTION_DOWN) {
                 if (handleKey(app, event)) {
