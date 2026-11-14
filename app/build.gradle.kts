@@ -46,6 +46,20 @@ android {
     }
     testOptions {
         unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // Robolectric fetches the Android runtime itself; use the same mirror as the build.
+            it.systemProperty("robolectric.dependency.repo.url", "https://maven-central.storage-download.googleapis.com/maven2")
+            it.maxHeapSize = "2g"
+            // File names with diacritics need a UTF-8 locale in the test JVM (Android always has one).
+            it.environment("LC_ALL", "C.UTF-8")
+            // The UI tests and the embedded SSH server do not share a JVM well.
+            it.forkEvery = 1
+        }
+    }
+    lint {
+        // Dependency update hints are noise for the build; real problems still fail it.
+        disable += setOf("GradleDependency", "NewerVersionAvailable", "OldTargetApi")
     }
 }
 
@@ -66,6 +80,9 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.80")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.15.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("com.github.luben:zstd-jni:1.5.7-3")
     testImplementation("org.apache.sshd:sshd-sftp:2.15.0")
     testImplementation("org.slf4j:slf4j-nop:2.0.17")
