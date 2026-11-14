@@ -12,14 +12,28 @@ android {
         applicationId = "cz.k4.salamanderdroid"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
+        // CI numbers the builds, so a newer APK always installs over an older one.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionName = "0.1.0"
+    }
+
+    // Release signing key from the environment (CI secrets); without it the debug key is used.
+    val keystorePath = System.getenv("SIGNING_KEYSTORE")?.takeIf { it.isNotEmpty() && file(it).isFile }
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("SIGNING_PASSWORD")
+                keyAlias = "salamander"
+                keyPassword = System.getenv("SIGNING_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (keystorePath != null) "release" else "debug")
         }
     }
     compileOptions {

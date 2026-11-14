@@ -79,8 +79,10 @@ Potřebujete JDK 21 a Android SDK (platforma 35, build-tools 35).
 ./gradlew assembleRelease        # → app/build/outputs/apk/release/app-release.apk
 ```
 
-Sestavení `release` je podepsané ladicím klíčem stroje, na kterém vzniklo. APK z různých strojů
-proto nejdou instalovat přes sebe; pro průběžné aktualizace je potřeba vlastní podpisový klíč.
+Bez podpisového klíče se `release` podepíše ladicím klíčem stroje a APK z různých strojů nejdou
+instalovat přes sebe. Stálý klíč se předává proměnnými `SIGNING_KEYSTORE` (cesta k souboru `.jks`,
+alias `salamander`) a `SIGNING_PASSWORD`; CI je bere ze secrets `SIGNING_KEYSTORE_BASE64`
+a `SIGNING_PASSWORD`.
 
 ## Stav
 
