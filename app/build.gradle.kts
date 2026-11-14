@@ -92,8 +92,11 @@ dependencies {
     implementation("com.github.luben:zstd-jni:1.5.7-3@aar")
     implementation("com.hierynomus:sshj:0.40.0")
     implementation("org.bouncycastle:bcprov-jdk18on:1.80")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.robolectric:robolectric:4.15.1")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

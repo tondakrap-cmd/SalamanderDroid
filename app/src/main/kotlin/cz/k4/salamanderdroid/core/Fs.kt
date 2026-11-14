@@ -22,6 +22,15 @@ interface Fs {
 
     /** Creates or truncates the file. */
     fun openWrite(path: String): OutputStream
+
+    /** Like [openWrite] when the final size is known (-1 otherwise); lets uploads stream. */
+    fun openWrite(path: String, size: Long): OutputStream = openWrite(path)
+
+    /**
+     * True when a write replaces the target only once it is complete (cloud uploads), so no
+     * temporary name is needed to protect an existing file.
+     */
+    val directWrites: Boolean get() = false
     fun mkdir(path: String)
     fun deleteFile(path: String)
 

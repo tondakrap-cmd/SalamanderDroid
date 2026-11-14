@@ -151,11 +151,12 @@ class Transfer(
                 return false
             }
         }
-        val part = target + PART_SUFFIX
+        val direct = dst.directWrites
+        val part = if (direct) target else target + PART_SUFFIX
         val startBytes = doneBytes
         try {
             open().use { input ->
-                dst.openWrite(part).use { output ->
+                dst.openWrite(part, size).use { output ->
                     val buffer = ByteArray(BUFFER_SIZE)
                     while (true) {
                         if (cancelled) throw CancelledException()
@@ -167,12 +168,16 @@ class Transfer(
                     }
                 }
             }
-            if (existing != null) dst.deleteFile(target)
-            dst.rename(part, target)
+            if (!direct) {
+                if (existing != null) dst.deleteFile(target)
+                dst.rename(part, target)
+            }
         } catch (error: Exception) {
-            try {
-                dst.deleteFile(part)
-            } catch (_: Exception) {
+            if (!direct) {
+                try {
+                    dst.deleteFile(part)
+                } catch (_: Exception) {
+                }
             }
             doneBytes = startBytes + size
             doneFiles++
